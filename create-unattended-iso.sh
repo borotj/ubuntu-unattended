@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 
 # file names & paths
-tmp="$HOME"  # destination folder to store the final iso file
+tmp="$HOME" # destination folder to store the final iso file
 hostname="ubuntu"
-currentuser="$( whoami)"
+currentuser="$(whoami)"
 
 # define spinner function for slow tasks
 # courtesy of http://fitnr.com/showing-a-bash-spinner.html
@@ -54,20 +54,18 @@ echo
 
 # ask if script runs without sudo or root priveleges
 if [ $currentuser != "root" ]; then
-    echo " you need sudo privileges to run this script, or run it as root"
+    echo " you run this without sudo privileges or not as root"
     exit 1
 fi
 
-#check that we are in ubuntu 16.04+
+# check that we are in ubuntu 16.04 or 17.04
+fgrep "16.04" /etc/os-release >/dev/null 2>&1
+if [ $? -eq 0 ]; then ub1604p="yes"; fi
+fgrep "17.04" /etc/os-release >/dev/null 2>&1
+if [ $? -eq 0 ]; then ub1604p="yes"; fi
 
-case "$(lsb_release -rs)" in
-    16*|18*) ub1604="yes" ;;
-    *) ub1604="" ;;
-esac
-
-#get the latest versions of Ubuntu LTS
-
-tmphtml=$tmp/tmphtml
+# get the latest versions of Ubuntu LTS
+tmphtml=$HOME/tmphtml
 rm $tmphtml >/dev/null 2>&1
 wget -O $tmphtml 'http://releases.ubuntu.com/' >/dev/null 2>&1
 
@@ -75,8 +73,6 @@ prec=$(fgrep Precise $tmphtml | head -1 | awk '{print $3}')
 trus=$(fgrep Trusty $tmphtml | head -1 | awk '{print $3}')
 xenn=$(fgrep Xenial $tmphtml | head -1 | awk '{print $3}')
 bion=$(fgrep Bionic $tmphtml | head -1 | awk '{print $3}')
-
-
 
 # ask whether to include vmware tools or not
 while true; do
@@ -119,12 +115,16 @@ else
 fi
 
 # ask the user questions about his/her preferences
+read -ep " please enter your preferred language (en/fr) : " -i "fr" language
 read -ep " please enter your preferred timezone: " -i "${timezone}" timezone
-read -ep " please enter your preferred username: " -i "netson" username
+read -ep " please enter your preferred username: " -i "${currentuser}" username
+# packages installation
 read -sp " please enter your preferred password: " password
 printf "\n"
 read -sp " confirm your preferred password: " password2
 printf "\n"
+defaultpkg="nano htop qemu-guest-agent"
+read -ep " which additional package to install (ex: nano htop): " -i "${defaultpkg}" packages
 read -ep " Make ISO bootable via USB: " -i "yes" bootable
 
 # check if the passwords match to prevent headaches
@@ -153,7 +153,7 @@ fi
 seed_file="netson.seed"
 if [[ ! -f $tmp/$seed_file ]]; then
     echo -n " downloading $seed_file: "
-    download "https://raw.githubusercontent.com/netson/ubuntu-unattended/master/$seed_file"
+    download "https://raw.githubusercontent.com/borotj/ubuntu-unattended/master/$seed_file"
 fi
 
 # install required packages
@@ -166,17 +166,13 @@ if [ $(program_is_installed "mkpasswd") -eq 0 ] || [ $(program_is_installed "mki
 fi
 if [[ $bootable == "yes" ]] || [[ $bootable == "y" ]]; then
     if [ $(program_is_installed "isohybrid") -eq 0 ]; then
-      #16.04
-      if [[ $ub1604 == "yes" || $(lsb_release -cs) == "artful" ]]; then
+      #16.04 or more
+      if [ $ub1604p == "yes" ]; then
         (apt-get -y install syslinux syslinux-utils > /dev/null 2>&1) &
-        spinner $!
-      else
-        (apt-get -y install syslinux > /dev/null 2>&1) &
         spinner $!
       fi
     fi
 fi
-
 
 # create working folders
 echo " remastering your iso file"
@@ -195,22 +191,13 @@ fi
 (cp -rT $tmp/iso_org $tmp/iso_new > /dev/null 2>&1) &
 spinner $!
 
-# set the language for the installation menu
-cd $tmp/iso_new
-#doesn't work for 16.04
-echo en > $tmp/iso_new/isolinux/lang
-
 #16.04
 #taken from https://github.com/fries/prepare-ubuntu-unattended-install-iso/blob/master/make.sh
 sed -i -r 's/timeout\s+[0-9]+/timeout 1/g' $tmp/iso_new/isolinux/isolinux.cfg
 
-
 # set late command
-
-   late_command="chroot /target curl -L -o /home/$username/start.sh https://raw.githubusercontent.com/netson/ubuntu-unattended/master/start.sh ;\
-     chroot /target chmod +x /home/$username/start.sh ;"
-
-
+late_command="apt-install wget; in-target wget --no-check-certificate -O /home/$username/start.sh https://github.com/borotj/ubuntu-unattended/raw/master/start.sh ;\
+in-target chmod +x /home/$username/start.sh ;"
 
 # copy the netson seed file to the iso
 cp -rT $tmp/$seed_file $tmp/iso_new/preseed/$seed_file
@@ -219,6 +206,9 @@ cp -rT $tmp/$seed_file $tmp/iso_new/preseed/$seed_file
 echo "
 # setup firstrun script
 d-i preseed/late_command                                    string      $late_command" >> $tmp/iso_new/preseed/$seed_file
+
+# add some packages to install
+echo "d-i pkgsel/include                                string      openssh-server ${packages}" >> $tmp/iso_new/preseed/$seed_file
 
 # generate the password hash
 pwhash=$(echo $password | mkpasswd -s -m sha-512)
@@ -230,6 +220,14 @@ sed -i "s@{{username}}@$username@g" $tmp/iso_new/preseed/$seed_file
 sed -i "s@{{pwhash}}@$pwhash@g" $tmp/iso_new/preseed/$seed_file
 sed -i "s@{{hostname}}@$hostname@g" $tmp/iso_new/preseed/$seed_file
 sed -i "s@{{timezone}}@$timezone@g" $tmp/iso_new/preseed/$seed_file
+if [ "$language" = "fr" ]; then
+    sed -i "s@en_US@fr_FR@g" $tmp/iso_new/preseed/$seed_file
+    sed -i "s@:en@:fr@g" $tmp/iso_new/preseed/$seed_file
+    sed -i "s@ US@ FR@g" $tmp/iso_new/preseed/$seed_file
+    sed -i "s@string      us@string      fr@g" $tmp/iso_new/preseed/$seed_file
+    sed -i "s@select      us@select      fr@g" $tmp/iso_new/preseed/$seed_file
+    sed -i "s@intl@latin9@g" $tmp/iso_new/preseed/$seed_file
+fi
 
 # calculate checksum for seed file
 seed_checksum=$(md5sum $tmp/iso_new/preseed/$seed_file)
@@ -242,12 +240,17 @@ sed -i "/label install/ilabel autoinstall\n\
 
 echo " creating the remastered iso"
 cd $tmp/iso_new
-(mkisofs -D -r -V "NETSON_UBUNTU" -cache-inodes -J -l -b isolinux/isolinux.bin -c isolinux/boot.cat -no-emul-boot -boot-load-size 4 -boot-info-table -o $tmp/$new_iso_name . > /dev/null 2>&1) &
+(mkisofs -D -r -V "Ubuntu_Server" -cache-inodes -J -l -b isolinux/isolinux.bin -c isolinux/boot.cat -no-emul-boot -boot-load-size 4 -boot-info-table -o $tmp/$new_iso_name . > /dev/null 2>&1) &
 spinner $!
 
 # make iso bootable (for dd'ing to  USB stick)
 if [[ $bootable == "yes" ]] || [[ $bootable == "y" ]]; then
     isohybrid $tmp/$new_iso_name
+fi
+
+# add "fr" in image name if language is "fr"
+if [ "$language" = "fr" ]; then
+    mv "$tmp/$new_iso_name" "$tmp/${new_iso_name/unattended/fr-unattended}"
 fi
 
 # cleanup
@@ -256,15 +259,20 @@ rm -rf $tmp/iso_new
 rm -rf $tmp/iso_org
 rm -rf $tmphtml
 
-
 # print info to user
 echo " -----"
 echo " finished remastering your ubuntu iso file"
-echo " the new file is located at: $tmp/$new_iso_name"
+if [ "$language" = "fr" ]; then
+    echo " the new file is located at: $tmp/${new_iso_name/unattended/fr-unattended}"
+else
+    echo " the new file is located at: $tmp/$new_iso_name"
+fi
 echo " your username is: $username"
 echo " your password is: $password"
 echo " your hostname is: $hostname"
+echo " your language is: $language"
 echo " your timezone is: $timezone"
+echo " packages: openssh-server $packages"
 echo
 
 # unset vars
@@ -278,3 +286,6 @@ unset download_location
 unset new_iso_name
 unset tmp
 unset seed_file
+unset language
+unset packages
+unset defaultpkg
